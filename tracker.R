@@ -3,7 +3,7 @@ library(data.table)
 library(lubridate)
 library(leaflet)
 library(devtools)
-library(zoo)
+library(slider)
 
 
 df_case <- fread('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv', stringsAsFactors = F)
@@ -40,14 +40,28 @@ df_trend_s <- df %>%
             dailyCases = sum(dailyCases, na.rm = T),
             dailyDeaths = sum(dailyDeaths, na.rm = T),
             casePC = dailyCases / Population,
-            deathPC = dailyDeaths / Population) %>%
+            deathPC = dailyDeaths / Population,
+            casePC = ifelse(is.na(casePC), 0, casePC),
+            deathPC = ifelse(is.na(deathPC), 0, deathPC)) %>%
+  ungroup() %>%
+  group_by(Province_State) %>%
+  arrange(dtime, .by_group = T) %>%
+  mutate(dailyCases_3day = slide_dbl(dailyCases, mean, .before = 1, .after = 1),
+         dailyDeaths_3day = slide_dbl(dailyDeaths, mean, .before = 1, .after = 1),
+         casePC_3day = slide_dbl(casePC, mean, .before = 1, .after = 1),
+         deathPC_3day = slide_dbl(deathPC, mean, .before = 1, .after = 1)) %>%
   filter(Province_State %in% c(
-    'Massachusetts', 'Maryland', 'California', 'Virginia',
-    'District of Columbia', 'Washington'
+    'Massachusetts', 
+    'Maryland',
+    'California',
+    'Virginia',
+    'District of Columbia', 
+    'Washington'
   ))
 
+
 plotly::ggplotly(
-  ggplot(df_trend_s, aes(dtime, deathPC, color = Province_State)) +
+  ggplot(df_trend_s, aes(dtime, deathPC_3day * 100000, color = Province_State)) +
     geom_line()
     # geom_smooth(se = F)
 )
@@ -55,6 +69,15 @@ plotly::ggplotly(
 
 # Trend County
 df_trend_c <- df %>% 
+  group_by(Combined_Key) %>%
+  arrange(dtime, .by_group = T) %>%
+  mutate(dailyCases_3day = slide_dbl(dailyCases, mean, .before = 1, .after = 1),
+         dailyDeaths_3day = slide_dbl(dailyDeaths, mean, .before = 1, .after = 1),
+         casePC_3day = slide_dbl(casePC, mean, .before = 1, .after = 1),
+         deathPC_3day = slide_dbl(deathPC, mean, .before = 1, .after = 1))
+
+
+df_trend_c_f <- df_trend_c %>%
   filter(Combined_Key %in% c(
     'Orange, California, US', 
     'San Bernardino, California, US',
@@ -62,28 +85,32 @@ df_trend_c <- df %>%
     'Montgomery, Maryland, US'))
 
 plotly::ggplotly(
-  ggplot(df_trend_c, aes(dtime, deathPC, color = Combined_Key)) +
+  ggplot(df_trend_c_f, aes(dtime, deathPC_3day * 100000, color = Combined_Key)) +
     geom_line()
     # geom_smooth(se=F)
 )
 
 
 # MAP
-df_latest <- df %>% 
-  filter(dtime == max(dtime) & deathPC > 0 & 
-         !is.na(deathPC) & is.finite(deathPC))
+df_latest <- df_trend_c %>% 
+  mutate(value = casePC_3day * 100000) %>%
+  filter(dtime == max(dtime) & value > 0 & 
+         !is.na(value) & is.finite(value))
   
 
 leaflet(df_latest) %>% 
   addProviderTiles(providers$CartoDB.DarkMatter) %>% 
   addCircleMarkers(lng = ~Long_,
                    lat = ~Lat, 
-                   radius = df_latest$deathPC * 100000, 
-                   opacity = df_latest$deathPC * 100000,
+                   radius = df_latest$value, 
+                   opacity = df_latest$value,
                    fill = T, 
                    popup = paste(
                      df_latest$Combined_Key, 
-                     '<br>No. Deaths: ', df_latest$dailyDeaths,
-                     '<br>Deaths per 100,000:', round(df_latest$deathPC * 100000, 2)),
+                     '<br>No. Cases: ', df_latest$dailyCases_3day,
+                     '<br>No. Cases per 100,000: ', round(df_latest$casePC_3day * 100000, 2),
+                     '<br>No. Deaths: ', df_latest$dailyDeaths_3day,
+                     '<br>Deaths per 100,000:', round(df_latest$deathPC_3day * 100000, 2),
+                     '<br>Population: ', df_latest$Population),
                    color = 'red') 
 
